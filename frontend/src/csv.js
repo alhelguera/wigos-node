@@ -1,5 +1,8 @@
 // Minimal RFC4180 CSV parser: handles quoted fields, escaped quotes ("") and commas within quotes.
-export function parseCsv(text) {
+// Returns the rows as arrays of fields, blank lines dropped.
+export function parseCsvRows(text) {
+  text = text.replace(/^﻿/, ""); // Excel writes a BOM in front of UTF-8 CSV
+
   const rows = [];
   let row = [];
   let field = "";
@@ -42,6 +45,21 @@ export function parseCsv(text) {
     rows.push(row);
   }
 
-  const [header, ...body] = rows.filter((r) => r.length && !(r.length === 1 && r[0] === ""));
+  return rows.filter((r) => r.length && !(r.length === 1 && r[0] === ""));
+}
+
+// Rows as objects keyed by the header row.
+export function parseCsv(text) {
+  const [header = [], ...body] = parseCsvRows(text);
   return body.map((cells) => Object.fromEntries(header.map((h, i) => [h, cells[i] ?? ""])));
+}
+
+const csvField = (value) => {
+  const text = value == null ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+// Rows of fields -> CSV text (CRLF line endings, as Excel writes them).
+export function toCsv(rows) {
+  return rows.map((row) => row.map(csvField).join(",")).join("\r\n") + "\r\n";
 }
