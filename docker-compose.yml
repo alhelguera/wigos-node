@@ -1,11 +1,13 @@
+
 services:
   db:
-    image: postgres:16-alpine
+    image: postgis/postgis:15-3.4
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-app_db}
       POSTGRES_USER: ${POSTGRES_USER:-app_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
@@ -17,14 +19,23 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      additional_contexts:
+        publishing: ./publishing
     restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-app_db}
+      - POSTGRES_USER=${POSTGRES_USER:-app_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-app_password}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
     env_file:
       - .env
-    environment:
-      POSTGRES_HOST: db
     volumes:
       - ./backend:/app
+      - ./publishing:/publishing
+      - ./test_data:/test_data
     ports:
       - "8000:8000"
     depends_on:
@@ -35,7 +46,8 @@ services:
     build: ./frontend
     restart: unless-stopped
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: ""
+      VITE_PROXY_TARGET: http://backend:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules

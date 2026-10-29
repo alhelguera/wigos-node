@@ -17,3 +17,6 @@ frontend/dist/
 # editors/os
 .vscode/
 .DS_Store
+
+# internal docs
+docs/
