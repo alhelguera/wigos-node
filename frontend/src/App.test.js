@@ -94,10 +94,10 @@ describe("App sidebar", () => {
     expect(hasSidebar()).toBe(false);
   });
 
-  it("counts the failures that need attention on the Publishing item", async () => {
+  it("counts the failed stations on the Publishing item", async () => {
     listPublications.mockResolvedValue({ count: 3, results: [] });
     await mountApp();
-    expect(listPublications).toHaveBeenCalledWith({ attention: 1, limit: 1 });
+    expect(listPublications).toHaveBeenCalledWith({ status: "failed", limit: 1 });
     expect(navItem("Publishing3")).toBeTruthy();
     expect(navItem("Stations")).toBeTruthy();
   });

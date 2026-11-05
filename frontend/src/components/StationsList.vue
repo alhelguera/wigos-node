@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onUnmounted, ref } from "vue";
-import { listLatestPublications, listMyStations } from "../api";
+import { listMyStations } from "../api";
 import PublicationStatusChip from "./PublicationStatusChip.vue";
 import StationsMap from "./StationsMap.vue";
 import SelectionBar from "./SelectionBar.vue";
@@ -20,36 +20,34 @@ const HEADERS = [
 const stations = ref([]);
 const loadState = ref({ status: "loading" });
 
-listMyStations()
-  .then((data) => {
-    stations.value = data;
-    loadState.value = { status: "success" };
-  })
-  .catch((err) => {
-    loadState.value = { status: "error", error: err.message };
-  });
-
-// Each station's latest publishing status, refreshed while one is on its way.
-// A station without one has no chip: no changes yet, or not one the user may see.
+// Each station's publishing status, refreshed while one is on its way. Empty, as
+// never queued, shows as unknown; null, as the user can't edit it, shows no chip.
+// A refresh only updates these: new stations would make the map fit itself again.
 const REFRESH_MS = 5000;
-const latest = ref({});
+const statuses = ref({});
 let timer = null;
 let left = false;
 
-async function loadLatest() {
+async function load() {
+  const firstLoad = loadState.value.status === "loading";
   try {
-    const data = await listLatestPublications();
+    const data = await listMyStations();
     if (left) return;
-    latest.value = data;
+    if (firstLoad) {
+      stations.value = data;
+      loadState.value = { status: "success" };
+    }
+    statuses.value = Object.fromEntries(data.map((station) => [station.station_id, station.publication_status]));
     emit("changed");
-  } catch {
-    return; // the list works without the chips
+  } catch (err) {
+    if (firstLoad && !left) loadState.value = { status: "error", error: err.message };
+    return; // a failing refresh keeps what is shown
   }
-  if (Object.values(latest.value).some(({ status }) => status === "pending" || status === "processing")) {
-    timer = setTimeout(loadLatest, REFRESH_MS);
+  if (Object.values(statuses.value).some((status) => status === "pending" || status === "processing")) {
+    timer = setTimeout(load, REFRESH_MS);
   }
 }
-loadLatest();
+load();
 
 onUnmounted(() => {
   left = true;
@@ -110,7 +108,7 @@ const rowProps = ({ item }) => ({ class: selectedIds.value.includes(item.station
           />
         </template>
         <template #[`item.publishing`]="{ item }">
-          <PublicationStatusChip v-if="latest[item.station_id]" :status="latest[item.station_id].status" />
+          <PublicationStatusChip v-if="statuses[item.station_id] != null" :status="statuses[item.station_id]" />
         </template>
         <template #[`item.actions`]="{ item }">
           <v-btn variant="tonal" color="secondary" size="small" @click="emit('edit', item.station_id)">Edit</v-btn>

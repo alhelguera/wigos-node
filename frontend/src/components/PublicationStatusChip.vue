@@ -6,19 +6,20 @@ export const PUBLICATION_STATUSES = {
   published: { label: "Published", color: "success", icon: "mdi-check-all" },
   failed: { label: "Publishing failed", color: "error", icon: "mdi-close" },
 };
+
+// A station with no status in the database. Not a status to filter by.
+const UNKNOWN = { label: "Unknown", color: "grey", icon: "mdi-help" };
 </script>
 
 <script setup>
-defineProps({ status: { type: String, required: true } });
+import { computed } from "vue";
+
+const props = defineProps({ status: { type: String, required: true } });
+const shown = computed(() => PUBLICATION_STATUSES[props.status] ?? UNKNOWN);
 </script>
 
 <template>
-  <v-chip
-    size="small"
-    variant="tonal"
-    :color="PUBLICATION_STATUSES[status].color"
-    :prepend-icon="PUBLICATION_STATUSES[status].icon"
-  >
-    {{ PUBLICATION_STATUSES[status].label }}
+  <v-chip size="small" variant="tonal" :color="shown.color" :prepend-icon="shown.icon">
+    {{ shown.label }}
   </v-chip>
 </template>
