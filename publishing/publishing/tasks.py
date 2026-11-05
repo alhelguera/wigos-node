@@ -28,6 +28,7 @@ from .wmdr2 import identity
 logger = logging.getLogger("publishing")
 
 BROKER_DOWN_WINDOW = 10  # seconds without trying to queue after a failure
+RETRYABLE = ("pending", "processing", "failed")  # publication statuses of a Station
 
 _opened = None
 _broker_down_until = 0.0
@@ -187,6 +188,27 @@ def request_publication(station_id):
     except OperationalError:
         _broker_down_until = time.monotonic() + BROKER_DOWN_WINDOW
         logger.exception("Station %s not queued: the broker is unreachable", station_id)
+
+
+class RetryRefused(Exception):
+    """The station can't be retried now; the message says why."""
+
+
+def retry_publication(station_id):
+    """Publish the station's current record again. Also for a station left pending
+    or processing, which is how one recovers from a crash or a Valkey outage.
+
+    Refused while its lock is held: the job may still be running, and a new job
+    would only stop at the lock. Unlike a save, this tells the user when the
+    broker can't be reached (redis.RedisError, OperationalError)."""
+    from api.models import Station
+
+    if state.is_locked(station_id):
+        raise RetryRefused("its job may still be running, try again in a few minutes")
+    stations = Station.objects.filter(pk=station_id, publication_status__in=RETRYABLE)
+    if not stations.update(publication_status=Station.PublicationStatus.PENDING):
+        raise RetryRefused("its current version was already published")
+    publish_station.delay(station_id)
 
 
 @app.task

@@ -66,6 +66,7 @@ def my_stations(request):
             "latitude": station.location.y,
             "longitude": station.location.x,
             "can_edit": station.id in editable,
+            "publication_status": station.publication_status if station.id in editable else None,
         }
         for station in my_stations
     ])
