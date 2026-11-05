@@ -9,7 +9,7 @@ Retries are manual: a failure makes the station failed, and a user retries it. A
 crashed job isn't run again automatically either. Its lock expires by itself and
 a user's retry starts over.
 
-Django is imported inside the functions: this module is loaded while Celery
+Models are imported inside the functions: this module is loaded while Celery
 starts, before Django is set up."""
 
 import logging
@@ -23,6 +23,7 @@ from kombu.exceptions import OperationalError
 from . import state
 from .base import Event, Operation, PublishError
 from .celery import app
+from .publishers import get_publishers
 from .wmdr2 import identity
 
 logger = logging.getLogger("publishing")
@@ -40,8 +41,6 @@ def opened_publishers():
     thread wouldn't survive the fork."""
     global _opened
     if _opened is None:
-        from outbox.publishers import get_publishers
-
         publishers = get_publishers()
         for publisher in publishers:
             publisher.open()
@@ -62,11 +61,6 @@ def close_publishers(**kwargs):
 def _event(station_id, wmdrv2, operation):
     wigos_identifier, version = identity(wmdrv2)
     return Event(
-        # Not used by the plugins; these go with the old worker
-        id=station_id,
-        previous_wmdrv2=None,
-        changed_by=None,
-        source="",
         operation=operation,
         station_id=station_id,
         wigos_identifier=wigos_identifier,

@@ -9,7 +9,9 @@ import json
 from unittest import mock
 
 import redis
-from django.test import Client, TestCase
+from django.conf import settings
+from django.core.checks.registry import registry
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from kombu.exceptions import OperationalError
 from rest_framework.test import APITestCase
@@ -18,9 +20,14 @@ from api import stations
 from api.models import Station, WIGOSNodeGroup, WIGOSNodeUser
 
 from . import state, tasks
-from .base import DefaultPublisher, Location, MessageGenerator, PublishError, Step, TransportLayer
+from .base import DefaultPublisher, Delivery, Location, Message, MessageGenerator, PublishError, Step, TransportLayer
+from .checks import check_publishers
 from .generators.wmdr2 import RecordFileGenerator
 from .generators.wnm import WNMGenerator
+from .publishers import get_publishers
+from .registry import ConfigurationError
+from .transports.mqtt import MQTTTransport
+from .transports.s3 import S3Transport
 
 Status = Station.PublicationStatus
 
@@ -344,6 +351,69 @@ class JobTestCase(TestCase):
         self.assertIn("properties.updated", state.load(station.pk)["error"])
 
 
+LOG = "publishing.transports.log.LogTransport"
+BROKEN = [
+    {"NAME": "files", "STEPS": [
+        {"NAME": "store", "GENERATOR": {"CLASS": "publishing.generators.wmdr2.RecordFileGenerator"}, "TRANSPORT": {"CLASS": LOG}},
+    ]},
+    {"NAME": "files", "STEPS": [
+        {"NAME": "store", "GENERATOR": {"CLASS": "nowhere.Generator"}, "TRANSPORT": {"CLASS": LOG}},
+    ]},
+]
+
+
+class PublishersSettingTestCase(SimpleTestCase):
+    def test_configured_publishers_build(self):
+        self.assertEqual(check_publishers(None), [])
+        [publisher] = get_publishers()
+        storage, wnm = publisher.steps
+        self.assertEqual((publisher.name, storage.name, wnm.name), ("wis2", "storage", "wnm"))
+        self.assertIsInstance(storage.generator, RecordFileGenerator)
+        self.assertIsInstance(storage.transport, S3Transport)
+        self.assertIsInstance(wnm.generator, WNMGenerator)
+        self.assertFalse(wnm.generator.skip_missing)
+        self.assertIsInstance(wnm.transport, MQTTTransport)
+
+    def test_publishers_are_built_once(self):
+        self.assertIs(get_publishers()[0], get_publishers()[0])
+
+    def test_the_check_is_registered(self):
+        self.assertIn(check_publishers, registry.get_checks())
+
+    @override_settings(PUBLISHERS=BROKEN)
+    def test_check_reports_every_problem(self):
+        errors = check_publishers(None)
+        self.assertEqual([e.id for e in errors], ["publishing.E001", "publishing.E001"])
+        self.assertIn("centre_id", errors[0].msg)
+        self.assertIn("NAME is used more than once", errors[1].msg)
+        with self.assertRaises(ConfigurationError):
+            get_publishers()
+
+    def test_changed_setting_rebuilds(self):
+        default = get_publishers()
+        with override_settings(PUBLISHERS=[]):
+            self.assertEqual(get_publishers(), [])
+        self.assertEqual([p.name for p in get_publishers()], [p.name for p in default])
+
+    @override_settings()
+    def test_missing_setting_means_no_publishers(self):
+        del settings.PUBLISHERS
+        # deleting a setting sends no setting_changed, so reset by hand
+        get_publishers.cache_clear()
+        self.addCleanup(get_publishers.cache_clear)
+        self.assertEqual(check_publishers(None), [])
+        self.assertEqual(get_publishers(), [])
+
+
+class ReadBackReceiptsTestCase(SimpleTestCase):
+    def test_a_read_back_receipt_has_no_body(self):
+        delivery = Delivery("wis2", Message(b"secret", "text/plain", name="f"), Location("http://f"), step="storage")
+        loaded = state.load_delivery(state.dump_delivery(delivery))
+        self.assertIsNone(loaded.message.body)
+        self.assertEqual(loaded.location, delivery.location)
+        self.assertEqual((loaded.publisher, loaded.step, loaded.message.name), ("wis2", "storage", "f"))
+
+
 class OpenedPublishersTestCase(TestCase):
     def setUp(self):
         self.addCleanup(setattr, tasks, "_opened", None)
@@ -354,7 +424,7 @@ class OpenedPublishersTestCase(TestCase):
         broker = MemoryBroker()
         publisher = MemoryPublisher("wis2", [Step("wnm", WNMGenerator(centre_id="io-test"), broker)], storage=storage)
 
-        with mock.patch("outbox.publishers.get_publishers", return_value=[publisher]):
+        with mock.patch.object(tasks, "get_publishers", return_value=[publisher]):
             self.assertEqual(tasks.opened_publishers(), [publisher])
             self.assertEqual(tasks.opened_publishers(), [publisher])
         self.assertEqual(broker.opened, 1)

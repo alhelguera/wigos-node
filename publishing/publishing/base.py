@@ -11,9 +11,8 @@ stored. Before a generator that needs_content() runs, its Publisher
 retrieves every earlier Location and hands over the file actually served, so
 e.g. a WNM's integrity always describes the stored file.
 
-The worker runs events in parallel threads and shares one instance of each
-plugin between them, so plugins must be thread-safe (or keep per-thread
-state themselves)."""
+Each worker process has its own instance of each plugin and runs one job at a
+time, so plugins don't have to be thread-safe."""
 
 import urllib.request
 from abc import ABC, abstractmethod
@@ -30,23 +29,19 @@ class Operation(StrEnum):
 
 @dataclass(frozen=True)
 class Event:
-    """A committed station change, as queued in the outbox. Plugins only see
-    this snapshot and never read or write stations themselves."""
+    """A station's current record, to publish. Plugins only see this snapshot and
+    never read or write stations themselves."""
 
-    id: int
     operation: Operation
     station_id: int
     wigos_identifier: str
-    wmdrv2: dict  # the record as stored when the change was made
-    previous_wmdrv2: dict | None  # before an update, when known
-    changed_by: int | None  # user id; None for superusers and the shell
-    source: str  # "api", "admin" or "system"
-    occurred_at: datetime
+    wmdrv2: dict
+    occurred_at: datetime  # the version of the record, the same on every retry
 
 
 @dataclass(frozen=True)
 class Message:
-    body: bytes | None  # None in a receipt read back from the outbox: it isn't kept
+    body: bytes | None  # None in a receipt read back from Valkey: it isn't kept
     media_type: str
     name: str | None = None  # file name for storage transports
     topic: str | None = None  # overrides the transport's default topic
@@ -69,7 +64,7 @@ class Location:
 class Delivery:
     """Receipt of one sent message, handed to the later steps of its publisher.
     For the stored file use `content` (see needs_content()), not message.body:
-    a receipt read back from the outbox has no body."""
+    a receipt read back from Valkey has no body."""
 
     publisher: str  # name of the publisher that sent it
     message: Message
@@ -79,7 +74,7 @@ class Delivery:
 
 
 class PublishError(Exception):
-    """A message could not be delivered. The worker marks the event failed;
+    """A message could not be delivered. The job marks the station failed;
     retrying it is up to a user."""
 
 
@@ -103,10 +98,10 @@ class TransportLayer(ABC):
         self.options = options
 
     def open(self):
-        """Connect. Called once per worker before the first send."""
+        """Connect. Called once per worker process before the first send."""
 
     def close(self):
-        """Disconnect. Called once when the worker stops."""
+        """Disconnect. Called once when the worker process stops."""
 
     @abstractmethod
     def send(self, message: Message) -> Location | None:
@@ -119,7 +114,7 @@ class TransportLayer(ABC):
         raising."""
 
     def remove(self, location: Location) -> None:
-        """Remove what send() stored at `location`, when a failed event is
+        """Remove what send() stored at `location`, when a failed attempt is
         undone. Default: nothing to remove (e.g. notification transports)."""
 
     def send_many(self, messages: list[Message]) -> list[Location | None]:
@@ -181,29 +176,27 @@ class Publisher(ABC):
         locations = step.transport.send_many(messages)
         return [Delivery(self.name, m, location, step=step.name) for m, location in zip(messages, locations)]
 
-    def publish(self, event: Event, deliveries: list[Delivery] = (), *, done=(), previous=(), on_step=None) -> list[Delivery]:
-        """Run the steps not yet `done` (step names) in order, stopping at the
-        first error, and return all of this publisher's receipts for the event.
+    def publish(self, event: Event, *, previous=(), on_step=None) -> list[Delivery]:
+        """Run the steps in order, stopping at the first error, and return this
+        publisher's receipts for the event.
 
-        `deliveries` are its receipts so far, for resuming; `previous` are its
-        receipts from the station's last change; on_step(step, receipts) is
-        called after each step so that the progress can be saved."""
+        `previous` are its receipts from the station's last publication;
+        on_step(step, receipts) is called after each step, so that a failure can
+        undo what was stored so far."""
         if not self.should_publish(event):
             return []
-        deliveries = list(deliveries)
-        # a deletion stores nothing: it refers to what the last change stored
+        deliveries = []
+        # a deletion stores nothing: it refers to what the last publication stored
         earlier = list(previous) if event.operation == Operation.DELETE else []
         for step in self.steps:
-            if step.name in done:
-                continue
             deliveries += self.run_step(step, event, earlier + deliveries)
             if on_step:
                 on_step(step, deliveries)
         return deliveries
 
     def undo(self, event: Event, deliveries: list[Delivery]) -> None:
-        """Remove what this publisher stored for an event that gave up, newest
-        first. Errors are left to the caller to record."""
+        """Remove what this publisher stored in a failed attempt, newest first.
+        Errors are left to the caller to record."""
         transports = {step.name: step.transport for step in self.steps}
         for delivery in reversed(deliveries):
             if delivery.publisher == self.name and delivery.location:

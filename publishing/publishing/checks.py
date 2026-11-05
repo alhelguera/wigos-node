@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.core.checks import Error, register
 
-from publishing.registry import ConfigurationError, build_publishers
+from .registry import ConfigurationError, build_publishers
 
 
 @register()
@@ -11,5 +11,5 @@ def check_publishers(app_configs, **kwargs):
     try:
         build_publishers(getattr(settings, "PUBLISHERS", []))
     except ConfigurationError as e:
-        return [Error(error, hint="Fix settings.PUBLISHERS.", id="outbox.E001") for error in e.errors]
+        return [Error(error, hint="Fix settings.PUBLISHERS.", id="publishing.E001") for error in e.errors]
     return []
