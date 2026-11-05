@@ -8,7 +8,7 @@ import logging
 from functools import cache
 from pathlib import Path
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from guardian.shortcuts import assign_perm, get_objects_for_user
 from jsonschema import Draft202012Validator
 
@@ -120,20 +120,9 @@ def assign_issuer_groups(station, wsis):
             assign_perm("change_station", node_group.group, station)
 
 
-def _mark_changed_by(station, user):
-    """Tell receivers of the station's save signals who made the change: the
-    outbox records it (backend/outbox). Plain attributes, never stored on the
-    station. Superusers are not named, only marked as admin."""
-    station._source = "admin" if user.is_superuser else "api"
-    station._changed_by = None if user.is_superuser else user
-
-
 def _save(station):
     try:
-        # one transaction with whatever the save signals write (the outbox
-        # event), also outside the batch endpoint's transaction
-        with transaction.atomic():
-            station.save()
+        station.save()
     except ValueError as e:
         raise StationError(str(e)) from e
     except IntegrityError as e:
@@ -145,7 +134,6 @@ def create_station(user, wmdrv2):
     wsis = wsis_of(wmdrv2)
     check_issuers(user, wsis, "create")
     station = Station(wmdrv2=wmdrv2, owner=user)
-    _mark_changed_by(station, user)
     _save(station)
     # after save so the station has a pk to attach object permissions to
     assign_perm("change_station", user, station)
@@ -162,7 +150,6 @@ def update_station(user, station, wmdrv2):
     # Old and new: the primary and additional IDs may both change.
     check_issuers(user, old_wsis + new_wsis, "update")
     station.wmdrv2 = wmdrv2  # save() updates the index fields
-    _mark_changed_by(station, user)
     _save(station)  # owner is unchanged on update
     added = [wsi for wsi in new_wsis if issuer_of(wsi) not in {issuer_of(old) for old in old_wsis}]
     assign_issuer_groups(station, added)

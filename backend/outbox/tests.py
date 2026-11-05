@@ -1,5 +1,4 @@
 import base64
-import copy
 import hashlib
 import json
 import threading
@@ -11,13 +10,12 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.db import transaction
-from django.test import Client, SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from api import stations
-from api.models import Station, WIGOSNodeGroup, WIGOSNodeUser
+from api.models import WIGOSNodeGroup, WIGOSNodeUser
 from publishing.base import (
     DefaultPublisher,
     Delivery,
@@ -99,133 +97,6 @@ class PublicationEventTestCase(TestCase):
 
         self.assertQuerySetEqual(PublicationEvent.objects.filter(issuers__overlap=["756", "999"]), [swiss, moved])
         self.assertQuerySetEqual(PublicationEvent.objects.filter(ordering_keys__overlap=["wsi:0-756-0-a"]), [swiss, moved])
-
-
-with open("/test_data/test_wmdrv2.json") as f:
-    BASE_RECORD = json.load(f)
-
-
-def record(wsi, title="Outbox station"):
-    data = copy.deepcopy(BASE_RECORD)
-    data["id"] = wsi
-    data["properties"]["title"] = title
-    return data
-
-
-class QueueOnStationChangeTestCase(APITestCase):
-    """Every committed station change leaves exactly one event; nothing that
-    is rolled back does."""
-
-    def setUp(self):
-        # issuer groups seeded by api migration 0004
-        self.member = WIGOSNodeUser.objects.create_user(username="ob_member", email="ob_member@example.com", password="pw")
-        self.member.groups.add(WIGOSNodeGroup.objects.get(issuer_identifier=756).group)
-        self.admin = WIGOSNodeUser.objects.create_superuser(username="ob_admin", email="ob_admin@example.com", password="pw")
-        PublicationEvent.objects.all().delete()
-
-    def events(self):
-        return list(PublicationEvent.objects.order_by("id"))
-
-    def test_create_queues_one_event(self):
-        station = stations.create_station(self.member, record("0-756-0-ob1"))
-
-        [event] = self.events()
-        self.assertEqual(event.operation, Operation.CREATE)
-        self.assertEqual(event.station_id, station.pk)
-        self.assertEqual(event.wigos_identifier, "0-756-0-ob1")
-        self.assertEqual(event.wmdrv2, station.wmdrv2)
-        self.assertIsNone(event.previous_wmdrv2)
-        self.assertEqual((event.source, event.changed_by), ("api", self.member))
-        self.assertEqual(event.issuers, ["756"])
-        self.assertEqual(event.ordering_keys, [f"station:{station.pk}", "wsi:0-756-0-ob1"])
-        self.assertEqual(event.status, PublicationEvent.Status.PENDING)
-
-    def test_update_keeps_the_previous_record(self):
-        station = stations.create_station(self.member, record("0-756-0-ob2", "Old"))
-        stations.update_station(self.member, station, record("0-756-0-ob2", "New"))
-
-        create, update = self.events()
-        self.assertEqual(update.operation, Operation.UPDATE)
-        self.assertEqual(update.previous_wmdrv2["properties"]["title"], "Old")
-        self.assertEqual(update.wmdrv2["properties"]["title"], "New")
-
-    def test_wsi_moving_issuer_keys_both(self):
-        station = stations.create_station(self.admin, record("0-756-0-ob3"))
-        stations.update_station(self.admin, station, record("0-76-0-ob3"))
-
-        update = self.events()[-1]
-        self.assertEqual((update.source, update.changed_by), ("admin", None))
-        self.assertEqual(update.wigos_identifier, "0-76-0-ob3")
-        self.assertEqual(update.issuers, ["756", "76"])
-        self.assertEqual(update.ordering_keys, [f"station:{station.pk}", "wsi:0-756-0-ob3", "wsi:0-76-0-ob3"])
-
-    def test_delete_queues_a_deletion_that_outlives_the_station(self):
-        station = stations.create_station(self.member, record("0-756-0-ob4"))
-        pk = station.pk
-        station.delete()
-
-        deletion = self.events()[-1]
-        self.assertEqual(deletion.operation, Operation.DELETE)
-        self.assertEqual(deletion.station_id, pk)
-        self.assertEqual(deletion.source, "system")
-        self.assertFalse(Station.objects.filter(pk=pk).exists())
-
-    def test_attribution_is_not_carried_to_a_later_save(self):
-        station = stations.create_station(self.member, record("0-756-0-ob5"))
-        station.save()  # e.g. a script, without stations.update_station
-        self.assertEqual([(e.source, e.changed_by) for e in self.events()], [("api", self.member), ("system", None)])
-
-    def test_rejected_save_queues_nothing(self):
-        stations.create_station(self.member, record("0-756-0-ob6"))
-        with self.assertRaises(stations.StationError):
-            stations.create_station(self.member, record("0-756-0-ob6"))  # WSI taken
-        self.assertEqual(len(self.events()), 1)
-
-    def post_batch(self, updates, dry_run=False):
-        self.client.force_authenticate(self.member)
-        return self.client.post(reverse("wmdrv2-batch"), {"dry_run": dry_run, "updates": updates}, format="json")
-
-    def test_batch_dry_run_queues_nothing(self):
-        station = stations.create_station(self.member, record("0-756-0-ob7"))
-        PublicationEvent.objects.all().delete()
-
-        response = self.post_batch([{"station_id": station.pk, "wmdrv2": record("0-756-0-ob7", "New")}], dry_run=True)
-
-        self.assertEqual(response.json()["summary"], {"ok": 1, "error": 0})
-        self.assertEqual(self.events(), [])
-
-    def test_batch_queues_only_the_accepted_updates(self):
-        ok = stations.create_station(self.member, record("0-756-0-ob8"))
-        other = stations.create_station(self.member, record("0-756-0-ob9"))
-        PublicationEvent.objects.all().delete()
-
-        response = self.post_batch([
-            {"station_id": ok.pk, "wmdrv2": record("0-756-0-ob8", "New")},
-            {"station_id": other.pk, "wmdrv2": record("0-756-0-ob8", "Clash")},  # WSI of the first station
-        ])
-
-        self.assertEqual(response.json()["summary"], {"ok": 1, "error": 1})
-        self.assertEqual([(e.station_id, e.operation) for e in self.events()], [(ok.pk, Operation.UPDATE)])
-
-    def test_each_committed_change_wakes_the_worker(self):
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            stations.create_station(self.member, record("0-756-0-ob10"))
-        self.assertEqual(len(callbacks), 1)
-
-    def test_rolled_back_changes_wake_nobody(self):
-        ok = stations.create_station(self.member, record("0-756-0-ob11"))
-        other = stations.create_station(self.member, record("0-756-0-ob12"))
-
-        with self.captureOnCommitCallbacks() as callbacks:
-            self.post_batch([{"station_id": ok.pk, "wmdrv2": record("0-756-0-ob11", "New")}], dry_run=True)
-        self.assertEqual(callbacks, [])
-
-        with self.captureOnCommitCallbacks() as callbacks:
-            self.post_batch([
-                {"station_id": ok.pk, "wmdrv2": record("0-756-0-ob11", "New")},
-                {"station_id": other.pk, "wmdrv2": record("0-756-0-ob11", "Clash")},
-            ])
-        self.assertEqual(len(callbacks), 1)
 
 
 LOG = "publishing.transports.log.LogTransport"
@@ -737,7 +608,7 @@ class ParallelWorkerTestCase(TransactionTestCase):
 
 
 def queue_and_notify(fail=False):
-    """A committed (or rolled back) event, notified like the signal does."""
+    """A committed (or rolled back) event, notified after commit."""
     with transaction.atomic():
         row = make_row(ordering_keys=["station:1"])
         transaction.on_commit(partial(worker.notify, row.pk))
@@ -1328,137 +1199,3 @@ class PublicationsAttentionAndLatestTestCase(PublicationsApiTestCase):
     def test_latest_needs_a_login(self):
         self.client.force_authenticate(None)
         self.assertIn(self.client.get(reverse("publications-latest")).status_code, (401, 403))
-
-
-class PublicationsVisibilityUseCaseTestCase(APITestCase):
-    """The whole flow: real stations saved through the API, nothing set by hand,
-    then what each kind of user sees."""
-
-    def setUp(self):
-        PublicationEvent.objects.all().delete()
-        self.author = self.user("uc_author", 756)
-        self.colleague = self.user("uc_colleague", 756)  # same group, didn't make the change
-        self.foreigner = self.user("uc_foreigner", 76)
-        self.outsider = self.user("uc_outsider")
-        self.admin = WIGOSNodeUser.objects.create_superuser(username="uc_admin", email="uc_admin@example.com", password="pw")
-
-    def user(self, name, *issuers):
-        user = WIGOSNodeUser.objects.create_user(username=name, email=f"{name}@example.com", password="pw")
-        for issuer in issuers:
-            user.groups.add(WIGOSNodeGroup.objects.get(issuer_identifier=issuer).group)
-        return user
-
-    def create(self, user, data):
-        self.client.force_authenticate(user)
-        response = self.client.post(reverse("wmdrv2"), data, format="json")
-        self.assertEqual(response.status_code, 201, response.content)
-        return Station.objects.get(pk=response.json()["station_id"])
-
-    def update(self, user, station, data):
-        self.client.force_authenticate(user)
-        response = self.client.put(reverse("wmdrv2", args=[station.pk]), data, format="json")
-        self.assertEqual(response.status_code, 200, response.content)
-
-    def seen(self, user):
-        self.client.force_authenticate(user)
-        return [(e["operation"], e["wigos_identifier"]) for e in self.client.get(reverse("publications")).json()["results"]]
-
-    def can_edit(self, user, station):
-        self.client.force_authenticate(user)
-        return {s["station_id"]: s["can_edit"] for s in self.client.get(reverse("my_stations")).json()}[station.pk]
-
-    def test_a_change_is_seen_by_the_issuer_group_and_nobody_else(self):
-        self.create(self.author, record("0-756-0-uc1"))
-        expected = [("create", "0-756-0-uc1")]
-
-        self.assertEqual(self.seen(self.author), expected)
-        self.assertEqual(self.seen(self.colleague), expected)  # by group, not by author
-        self.assertEqual(self.seen(self.admin), expected)
-        self.assertEqual(self.seen(self.foreigner), [])
-        self.assertEqual(self.seen(self.outsider), [])
-
-    def test_those_who_can_edit_the_station_see_its_events_and_the_rest_dont(self):
-        station = self.create(self.author, record("0-756-0-uc2"))
-        for user in (self.author, self.colleague, self.admin):
-            self.assertTrue(self.can_edit(user, station), user.username)
-            self.assertEqual(len(self.seen(user)), 1, user.username)
-        for user in (self.foreigner, self.outsider):
-            self.assertFalse(self.can_edit(user, station), user.username)
-            self.assertEqual(self.seen(user), [], user.username)
-
-    def test_a_colleague_sees_later_updates_too(self):
-        station = self.create(self.author, record("0-756-0-uc3"))
-        self.update(self.colleague, station, record("0-756-0-uc3", "New title"))
-        expected = [("update", "0-756-0-uc3"), ("create", "0-756-0-uc3")]
-        self.assertEqual(self.seen(self.author), expected)
-        self.assertEqual(self.seen(self.foreigner), [])
-
-    def test_a_deleted_stations_events_stay_visible_to_its_group(self):
-        station = self.create(self.author, record("0-756-0-uc4"))
-        station.delete()
-        self.assertEqual(self.seen(self.colleague), [("delete", "0-756-0-uc4"), ("create", "0-756-0-uc4")])
-        self.assertEqual(self.seen(self.foreigner), [])
-
-    def test_a_wsi_moved_to_another_issuer_shows_the_move_to_both_groups(self):
-        station = self.create(self.admin, record("0-756-0-uc5"))
-        self.update(self.admin, station, record("0-76-0-uc5"))
-
-        move = ("update", "0-76-0-uc5")
-        self.assertEqual(self.seen(self.author), [move, ("create", "0-756-0-uc5")])
-        self.assertEqual(self.seen(self.foreigner), [move])  # not the time before it arrived
-        self.assertEqual(self.seen(self.outsider), [])
-
-    def test_an_additional_wsi_of_another_issuer_shows_to_both_groups(self):
-        both = self.user("uc_both", 756, 76)
-        data = record("0-756-0-uc6")
-        data["properties"]["additionalIds"] = ["0-76-0-uc6"]
-        self.create(both, data)
-
-        self.assertEqual(len(self.seen(self.colleague)), 1)
-        self.assertEqual(len(self.seen(self.foreigner)), 1)
-        self.assertEqual(self.seen(self.outsider), [])
-
-    def test_a_member_can_retry_a_colleagues_failed_change_but_a_foreigner_cant(self):
-        self.create(self.author, record("0-756-0-uc7"))
-        event = PublicationEvent.objects.get()
-        PublicationEvent.objects.filter(pk=event.pk).update(status=PublicationEvent.Status.FAILED)
-        retry = reverse("publication-retry", args=[event.pk])
-
-        self.client.force_authenticate(self.foreigner)
-        self.assertEqual(self.client.post(retry).status_code, 404)
-        self.client.force_authenticate(self.outsider)
-        self.assertEqual(self.client.post(retry).status_code, 404)
-        self.client.force_authenticate(self.colleague)
-        self.assertEqual(self.client.post(retry).status_code, 200)
-
-    def test_leaving_the_group_takes_the_events_away(self):
-        self.create(self.author, record("0-756-0-uc8"))
-        self.colleague.groups.clear()
-        self.assertEqual(self.seen(self.colleague), [])
-
-    def test_a_real_login_session_works_the_way_the_frontend_uses_it(self):
-        self.create(self.author, record("0-756-0-uc9"))
-        event = PublicationEvent.objects.get()
-        PublicationEvent.objects.filter(pk=event.pk).update(status=PublicationEvent.Status.FAILED)
-        retry = reverse("publication-retry", args=[event.pk])
-        browser = Client(enforce_csrf_checks=True)
-
-        self.assertEqual(browser.get(reverse("publications")).status_code, 403)  # not logged in yet
-
-        browser.get(reverse("auth-csrf"))
-        login = browser.post(
-            reverse("auth-login"), {"username": "uc_colleague", "password": "pw"}, content_type="application/json"
-        )
-        self.assertEqual(login.status_code, 200, login.content)
-        browser.get(reverse("auth-csrf"))  # login rotates the token
-
-        [listed] = browser.get(reverse("publications")).json()["results"]
-        self.assertEqual((listed["id"], listed["can_retry"]), (event.pk, True))
-
-        self.assertEqual(browser.post(retry).status_code, 403)  # no CSRF token
-        event.refresh_from_db()
-        self.assertEqual(event.status, PublicationEvent.Status.FAILED)
-
-        answer = browser.post(retry, HTTP_X_CSRFTOKEN=browser.cookies["csrftoken"].value)
-        self.assertEqual(answer.status_code, 200, answer.content)
-        self.assertEqual(answer.json()["status"], "pending")

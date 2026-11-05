@@ -42,34 +42,6 @@ services:
       db:
         condition: service_healthy
 
-  # Publishes station changes queued in the outbox (backend/outbox), with the
-  # backend's image and settings. It doesn't reload on code changes: restart
-  # it after editing backend/outbox or publishing/.
-  publisher:
-    build: *backend-build
-    restart: unless-stopped
-    environment: *backend-environment
-    env_file:
-      - .env
-    volumes: *backend-volumes
-    # Not the backend's entrypoint: the backend runs the migrations, and this
-    # waits until they are applied. exec makes the worker PID 1, so docker
-    # stop's SIGTERM reaches it and it finishes its current events.
-    entrypoint:
-      - sh
-      - -c
-      - until python manage.py migrate --check > /dev/null 2>&1; do sleep 2; done; exec python manage.py run_publishers
-    stop_grace_period: 30s
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_started
-      minio:
-        condition: service_healthy
-      mosquitto:
-        condition: service_healthy
-
   # MQTT broker the WNMs are published to. A production deployment points
   # WIS2_BROKER_URL at its own broker, or sets WIS2_PUBLISH_WNM=false.
   mosquitto:

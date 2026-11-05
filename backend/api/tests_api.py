@@ -6,9 +6,6 @@ from guardian.shortcuts import assign_perm
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from django.db.models.signals import pre_save
-
-from . import stations
 from .models import Station, WIGOSNodeGroup, WIGOSNodeUser
 
 
@@ -96,44 +93,6 @@ def record(wsi, title="Batch station"):
     data['id'] = wsi
     data['properties']['title'] = title
     return data
-
-
-class ChangedByTestCase(APITestCase):
-    """create_station/update_station tell the save signals who changed the
-    station (read by the outbox)."""
-
-    def setUp(self):
-        self.member = WIGOSNodeUser.objects.create_user(username='cb_member', email='cb_member@example.com', password='pw')
-        self.member.groups.add(WIGOSNodeGroup.objects.get(issuer_identifier=ISSUER_A).group)
-        self.admin = WIGOSNodeUser.objects.create_superuser(username='cb_admin', email='cb_admin@example.com', password='pw')
-
-    def saved_markers(self, action):
-        seen = []
-
-        def receiver(sender, instance, **kwargs):
-            seen.append((instance._source, instance._changed_by))
-
-        # pre_save: post_save receivers (the outbox) consume the markers
-        pre_save.connect(receiver, sender=Station)
-        self.addCleanup(pre_save.disconnect, receiver, sender=Station)
-        action()
-        return seen
-
-    def test_regular_user_is_named(self):
-        seen = self.saved_markers(lambda: stations.create_station(self.member, record(f'0-{ISSUER_A}-0-cb1')))
-        self.assertEqual(seen, [('api', self.member)])
-
-        station = Station.objects.get(wigos_identifier=f'0-{ISSUER_A}-0-cb1')
-        seen = self.saved_markers(lambda: stations.update_station(self.member, station, record(f'0-{ISSUER_A}-0-cb1', 'New')))
-        self.assertEqual(seen, [('api', self.member)])
-
-    def test_superuser_is_marked_admin_without_a_name(self):
-        seen = self.saved_markers(lambda: stations.create_station(self.admin, record(f'0-{ISSUER_A}-0-cb2')))
-        self.assertEqual(seen, [('admin', None)])
-
-        station = Station.objects.get(wigos_identifier=f'0-{ISSUER_A}-0-cb2')
-        seen = self.saved_markers(lambda: stations.update_station(self.admin, station, record(f'0-{ISSUER_A}-0-cb2', 'New')))
-        self.assertEqual(seen, [('admin', None)])
 
 
 class BatchAPITestCase(APITestCase):
