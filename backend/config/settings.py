@@ -174,7 +174,8 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
     "loggers": {
         "outbox": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL},
-        "publishing": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL},
+        # no propagating: the Celery worker adds its own root handler
+        "publishing": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL, "propagate": False},
     },
 }
 

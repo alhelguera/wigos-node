@@ -8,9 +8,11 @@ import logging
 from functools import cache
 from pathlib import Path
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from guardian.shortcuts import assign_perm, get_objects_for_user
 from jsonschema import Draft202012Validator
+
+from publishing.tasks import request_publication
 
 from .models import Station, WIGOSNodeGroup
 
@@ -120,6 +122,13 @@ def assign_issuer_groups(station, wsis):
             assign_perm("change_station", node_group.group, station)
 
 
+def _mark_changed(station, user):
+    """Who changed the station, and that this version isn't published yet. Saved
+    with the record."""
+    station.last_changed_by = None if user.is_superuser else user  # superusers aren't named
+    station.publication_status = Station.PublicationStatus.PENDING
+
+
 def _save(station):
     try:
         station.save()
@@ -129,15 +138,25 @@ def _save(station):
         raise StationError(f"The station could not be saved: {e}") from e
 
 
+def _publish(station):
+    """Publish the station once committed, so a rolled back batch update or dry
+    run publishes nothing. A failure to enqueue is logged and doesn't fail the
+    change: the station stays pending."""
+    # not a partial: logging a robust callback's failure needs its __qualname__
+    transaction.on_commit(lambda: request_publication(station.pk), robust=True)
+
+
 def create_station(user, wmdrv2):
     validate(wmdrv2)
     wsis = wsis_of(wmdrv2)
     check_issuers(user, wsis, "create")
     station = Station(wmdrv2=wmdrv2, owner=user)
+    _mark_changed(station, user)
     _save(station)
     # after save so the station has a pk to attach object permissions to
     assign_perm("change_station", user, station)
     assign_issuer_groups(station, wsis)
+    _publish(station)
     return station
 
 
@@ -150,7 +169,9 @@ def update_station(user, station, wmdrv2):
     # Old and new: the primary and additional IDs may both change.
     check_issuers(user, old_wsis + new_wsis, "update")
     station.wmdrv2 = wmdrv2  # save() updates the index fields
+    _mark_changed(station, user)
     _save(station)  # owner is unchanged on update
     added = [wsi for wsi in new_wsis if issuer_of(wsi) not in {issuer_of(old) for old in old_wsis}]
     assign_issuer_groups(station, added)
+    _publish(station)
     return station
