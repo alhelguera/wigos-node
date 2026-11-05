@@ -5,6 +5,24 @@ import json
 
 from django.db.utils import IntegrityError
 
+class StationChangeFieldsTestCase(TestCase):
+
+    def test_existing_stations_have_no_status_or_author(self):
+        """The test stations are created by a migration before these fields."""
+        station = Station.objects.get(wigos_identifier='0-20000-0-12345')
+        self.assertEqual(station.publication_status, '')
+        self.assertIsNone(station.last_changed_by)
+
+    def test_deleting_the_user_keeps_the_station(self):
+        user = WIGOSNodeUser.objects.create_user(username='changer', email='changer@example.com', password='pw')
+        Station.objects.filter(wigos_identifier='0-20000-0-12345').update(last_changed_by=user)
+
+        user.delete()
+
+        station = Station.objects.get(wigos_identifier='0-20000-0-12345')
+        self.assertIsNone(station.last_changed_by)
+
+
 class StationCreationTestCase(TestCase):
 
 

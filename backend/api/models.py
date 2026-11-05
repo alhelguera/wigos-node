@@ -53,6 +53,12 @@ class StationQuerySet(models.QuerySet):
         return self.filter(wigos_identifier=wigos_identifier).exists() or self.with_additional_wigos_identifier(wigos_identifier).exists()
 
 class Station(models.Model):
+    class PublicationStatus(models.TextChoices):
+        PENDING = "pending"
+        PROCESSING = "processing"
+        PROCESSED = "processed"  # every publisher ran (the WNM was sent, not yet confirmed)
+        FAILED = "failed"
+
     objects = StationQuerySet.as_manager()
 
     wmdrv2 = models.JSONField(null=False, blank=False)
@@ -87,6 +93,14 @@ class Station(models.Model):
     
     
     owner = models.ForeignKey("WIGOSNodeUser", on_delete=models.CASCADE, related_name='stations')
+
+    # Empty for superusers and scripts, which aren't named.
+    last_changed_by = models.ForeignKey(
+        "WIGOSNodeUser", on_delete=models.SET_NULL, null=True, blank=True, related_name='changed_stations'
+    )
+
+    # Empty until the station is first queued for publishing.
+    publication_status = models.CharField(max_length=10, choices=PublicationStatus.choices, blank=True, default="")
 
     def get_wigos_identifiers(self):
         wsis = []
