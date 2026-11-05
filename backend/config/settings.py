@@ -164,7 +164,7 @@ PUBLISHERS = [
 # or WIGOS ID never run at the same time.
 PUBLISHING_WORKERS = int(os.environ.get("PUBLISHING_WORKERS", "8"))
 
-# Publishing logs to the console (docker compose logs publisher); INFO shows
+# Publishing logs to the console (docker compose logs worker); INFO shows
 # every processed event and, with the log transports, every message.
 PUBLISHING_LOG_LEVEL = os.environ.get("PUBLISHING_LOG_LEVEL", "INFO")
 LOGGING = {
