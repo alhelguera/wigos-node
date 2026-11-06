@@ -3,8 +3,9 @@ import { codelistProps } from "../codelists";
 import { TIME_FIELDS, GEOMETRY_FIELDS, DATES_FIELD } from "../fieldDefs";
 import { describeInterval } from "../interval";
 
-// Field names/shapes follow definitions/Observations, Configurations and
-// Instrument in wmo-im/wmdr2 schemas/wmdr2-bundled.json.
+// Field names/shapes follow definitions/Observation, Configuration and
+// Instrument in wmo-im/wmdr2 schemas/wmdr2-bundled.json. An observation's
+// contacts have no field here: they are kept as stored (see wmdr.js).
 
 const INSTRUMENT_FIELDS = [
   { name: "id", label: "Instrument ID", type: "text" },

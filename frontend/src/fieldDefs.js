@@ -12,7 +12,7 @@ export const TIME_FIELDS = [
 ];
 
 // The station's own time has no resolution (wmo-im/wmdr2 PR #41 disallows it
-// there); configurations keep it. A stored value is still written back.
+// there); configurations keep it. A stored value is dropped on save.
 export const STATION_TIME_FIELDS = TIME_FIELDS.filter((field) => field.name !== "resolution");
 
 // Programme affiliation and territory `dates`: full days only, per the schema.

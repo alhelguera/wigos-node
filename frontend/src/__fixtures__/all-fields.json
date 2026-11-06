@@ -3,7 +3,7 @@
   "conformsTo": ["http://wigos.wmo.int/spec/wmdr/2/conf/core"],
   "type": "Feature",
   "geometry": { "type": "Point", "coordinates": [6.1, 46.2, 420] },
-  "time": { "date": "2020-01-01", "timestamp": "2020-01-01T00:00:37.000Z", "interval": ["2020-01", ".."], "resolution": "PT1H" },
+  "time": { "date": "2020-01-01", "timestamp": "2020-01-01T00:00:37.000Z", "interval": ["2020-01", ".."] },
   "properties": {
     "type": "facility",
     "title": "Full station",
@@ -26,6 +26,7 @@
     "wmoRegion": { "id": "europe" },
     "territories": [{ "territory": { "id": "CHE" }, "dates": ["2011-02-16", ".."] }],
     "observations": [{
+      "contacts": [{ "organization": "Observation team", "name": "A. Person" }],
       "observedGeometry": { "id": "point" },
       "observedProperty": { "id": "224", "url": "http://codes.wmo.int/wmdr/ObservedVariableAtmosphere/224" },
       "programAffiliations": [{ "programAffiliation": { "id": "GOS" }, "reportingStatus": { "id": "operational" }, "dates": ["2020-01-01", "2021-01-01"] }],
