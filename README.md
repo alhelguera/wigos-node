@@ -1,9 +1,9 @@
-# wigos-node
+# wigos-node-poc
 
 ## Introduction
 
-A WIGOS node: a web application for managing the metadata of observing stations
-and publishing via WIS2 infrastructure.
+WIGOS node Proof of Concept: a web application for managing WMDRv2 metadata of observing stations
+and publishing it via WIS2 infrastructure.
 
 - Create and edit station records in a form validated against the schema.
 - Change many stations at once in a spreadsheet, or through Excel and CSV files.
@@ -12,7 +12,7 @@ and publishing via WIS2 infrastructure.
   Notification Message (WNM) over MQTT.
 
 Station records follow WMDR2, version 1.99dev2, using the JSON schema from
-[wmo-im/wmdr2](https://github.com/wmo-im/wmdr2) (`wmdrRecordGeoJSON.yaml`, bundled).
+[wmo-im/wmdr2](https://github.com/wmo-im/wmdr2/releases/tag/1.99.dev2) (`wmdrRecordGeoJSON.yaml`, bundled).
 
 ## Architecture
 
@@ -77,7 +77,7 @@ Then open:
 - MinIO console: http://localhost:9001
 
 Migrations run when `backend` starts, which also refreshes the codelists from
-codes.wmo.int and keeps the existing files if that fails. Migrations also create:
+codes.wmo.int and keeps the existing files if that fails. For testing purposes during initial development, migrations also create:
 
 - a superuser, `admin` / `admin`, who owns the sample stations
 - a test user, `test_user1` / `test_password1`, in the Switzerland and Brazil groups
