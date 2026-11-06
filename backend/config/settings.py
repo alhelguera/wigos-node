@@ -11,7 +11,7 @@ ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,back
 
 INSTALLED_APPS = [
     "api.apps.ApiConfig",
-    "outbox.apps.OutboxConfig",
+    "publishing.apps.PublishingConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -110,7 +110,7 @@ WNM_CENTRE_ID = os.environ.get("WNM_CENTRE_ID", "io-wis2dev-test-wigosnode")
 WNM_STORAGE_URL = os.environ.get("WNM_STORAGE_URL", "https://wigosnode.test.wis2dev.io/webstorage")
 WNM_STORAGE_SECURE = os.environ.get("WNM_STORAGE_SECURE", "false").lower() == "true"
 
-# Publishers the outbox worker runs for every station change. Each is one process
+# Publishers the Celery worker runs for every station change. Each is one process
 # from start to end, and they don't depend on each other.
 # Classes are dotted paths into any installed package (publishing.registry).
 PUBLISHERS = [
@@ -160,21 +160,18 @@ PUBLISHERS = [
         ],
     },
 ]
-# Threads of the outbox worker (run_publishers); events of the same station
-# or WIGOS ID never run at the same time.
-PUBLISHING_WORKERS = int(os.environ.get("PUBLISHING_WORKERS", "8"))
 
-# Publishing logs to the console (docker compose logs publisher); INFO shows
-# every processed event and, with the log transports, every message.
+# Publishing logs to the console (docker compose logs worker); INFO shows
+# every published station and, with the log transports, every message.
 PUBLISHING_LOG_LEVEL = os.environ.get("PUBLISHING_LOG_LEVEL", "INFO")
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {"plain": {"format": "%(asctime)s %(levelname)s %(name)s %(threadName)s: %(message)s"}},
+    "formatters": {"plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"}},
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
     "loggers": {
-        "outbox": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL},
-        "publishing": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL},
+        # no propagating: the Celery worker adds its own root handler
+        "publishing": {"handlers": ["console"], "level": PUBLISHING_LOG_LEVEL, "propagate": False},
     },
 }
 

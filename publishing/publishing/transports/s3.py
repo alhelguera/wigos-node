@@ -35,7 +35,7 @@ class S3Transport(TransportLayer):
     <endpoint>/<bucket>), create_bucket (default False: for development,
     create a missing bucket with anonymous read on the first send) and
     timeout (seconds per request, default 30; with the retries a call
-    gives up well within the worker's lease, unlike the client's default)."""
+    gives up well within the job's lock, unlike the client's default)."""
 
     def __init__(self, *, endpoint, bucket, access_key=None, secret_key=None, secure=True, region=None,
                  prefix="", public_url=None, internal_url=None, create_bucket=False, timeout=30, **options):
@@ -50,9 +50,8 @@ class S3Transport(TransportLayer):
         self.public_url = (public_url or default_url).rstrip("/")
         self.internal_url = (internal_url or default_url).rstrip("/")
         self.create_bucket = create_bucket
-        # thread-safe, and connects on use, so open() can't fail on the network
+        # connects on use, so open() can't fail on the network
         http_client = urllib3.PoolManager(
-            maxsize=16,  # the worker's threads share the client
             timeout=urllib3.Timeout(connect=min(timeout, 5), read=timeout),
             retries=urllib3.Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504]),
         )

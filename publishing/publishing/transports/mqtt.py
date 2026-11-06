@@ -21,8 +21,8 @@ class MQTTTransport(TransportLayer):
     (default topic; a message's own topic wins), qos (default 1) and timeout
     (seconds to wait for a connection, default 5).
 
-    One client is shared by the worker's threads, with its own network thread
-    that also reconnects and re-sends what the broker hasn't acknowledged. An
+    Each worker process has one client, with its own network thread that also
+    reconnects and re-sends what the broker hasn't acknowledged. An
     accepted message can't be recalled, so there is nothing to remove()."""
 
     def __init__(self, *, url, topic=None, qos=1, timeout=5, **options):

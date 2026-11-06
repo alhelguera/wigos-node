@@ -25,14 +25,10 @@ def one_step(generator, transport, name="main"):
 
 def make_event(operation=Operation.CREATE, **fields):
     values = {
-        "id": 1,
         "operation": operation,
         "station_id": 7,
         "wigos_identifier": "0-20000-0-12345",
         "wmdrv2": {"id": "0-20000-0-12345"},
-        "previous_wmdrv2": None,
-        "changed_by": None,
-        "source": "system",
         "occurred_at": datetime(2026, 10, 28, tzinfo=timezone.utc),
     }
     values.update(fields)
@@ -108,18 +104,18 @@ class PublisherTestCase(unittest.TestCase):
         self.publisher = DefaultPublisher("echo", one_step(EchoGenerator(), self.transport))
 
     def test_publish_sends_generated_messages(self):
-        self.publisher.publish(make_event(Operation.UPDATE), [])
+        self.publisher.publish(make_event(Operation.UPDATE))
         self.assertEqual([m.body for m in self.transport.sent], [b"update"])
         self.assertEqual(self.transport.sent[0].name, "0-20000-0-12345")
 
     def test_generator_returning_nothing_sends_nothing(self):
-        self.assertEqual(self.publisher.publish(make_event(Operation.DELETE), []), [])
+        self.assertEqual(self.publisher.publish(make_event(Operation.DELETE)), [])
         self.assertEqual(self.transport.sent, [])
 
     def test_should_publish_filters_events(self):
         publisher = CreatesOnlyPublisher("creates", one_step(EchoGenerator(), self.transport))
-        self.assertEqual(publisher.publish(make_event(Operation.UPDATE), []), [])
-        publisher.publish(make_event(Operation.CREATE), [])
+        self.assertEqual(publisher.publish(make_event(Operation.UPDATE)), [])
+        publisher.publish(make_event(Operation.CREATE))
         self.assertEqual([m.body for m in self.transport.sent], [b"create"])
 
     def test_open_and_close_reach_the_transport(self):
@@ -147,14 +143,14 @@ class PublisherTestCase(unittest.TestCase):
 class DeliveryTestCase(unittest.TestCase):
     def test_publish_returns_receipts_with_locations(self):
         publisher = DefaultPublisher("files", one_step(EchoGenerator(), RecordingTransport(url="http://store")))
-        [delivery] = publisher.publish(make_event(), [])
+        [delivery] = publisher.publish(make_event())
         self.assertEqual(delivery.publisher, "files")
         self.assertEqual(delivery.message.body, b"create")
         self.assertEqual(delivery.location, Location("http://store/0-20000-0-12345"))
         self.assertIsNone(delivery.content)
 
     def test_notification_receipts_have_no_location(self):
-        [delivery] = DefaultPublisher("note", one_step(EchoGenerator(), RecordingTransport())).publish(make_event(), [])
+        [delivery] = DefaultPublisher("note", one_step(EchoGenerator(), RecordingTransport())).publish(make_event())
         self.assertIsNone(delivery.location)
 
     def test_generator_gets_the_retrieved_file_not_the_sent_body(self):
@@ -167,15 +163,30 @@ class DeliveryTestCase(unittest.TestCase):
         publisher = FakeRetrievalPublisher(
             "check", one_step(generator, RecordingTransport()), files={"http://internal/f": b"as stored"}
         )
-        publisher.publish(make_event(), earlier)
+        publisher.run_step(publisher.steps[0], make_event(), earlier)
         self.assertEqual(publisher.retrieved, ["http://internal/f"])
         self.assertEqual([d.content for d in generator.seen], [b"as stored", None])
         self.assertEqual([m.body for m in publisher.steps[0].transport.sent], [b"as stored"])
 
     def test_nothing_is_retrieved_unless_needed(self):
         publisher = FakeRetrievalPublisher("echo", one_step(EchoGenerator(), RecordingTransport()), files={})
-        publisher.publish(make_event(), [Delivery("files", Message(b"x", "text/plain"), Location("http://f"))])
+        publisher.run_step(
+            publisher.steps[0], make_event(), [Delivery("files", Message(b"x", "text/plain"), Location("http://f"))]
+        )
         self.assertEqual(publisher.retrieved, [])
+
+    def test_a_generator_relying_on_a_read_back_body_fails_instead_of_sending_nothing(self):
+        class Mirror(MessageGenerator):
+            def generate(self, event, deliveries):
+                return [Message(d.message.body, "text/plain") for d in deliveries]
+
+        transport = RecordingTransport()
+        publisher = DefaultPublisher("mirror", one_step(Mirror(), transport))
+        read_back = Delivery("files", Message(None, "text/plain"), Location("http://f"))
+
+        with self.assertRaisesRegex(PublishError, "without a body"):
+            publisher.run_step(publisher.steps[0], make_event(), [read_back])
+        self.assertEqual(transport.sent, [])
 
     def test_retrieve_reads_the_internal_url(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -246,16 +257,6 @@ class StepsTestCase(unittest.TestCase):
         self.publisher.open()
         self.publisher.close()
         self.assertTrue(self.storage.opened and self.storage.closed and self.notes.opened and self.notes.closed)
-
-    def test_steps_already_done_are_skipped_and_their_receipts_reused(self):
-        store, _ = self.publisher.publish(make_event())
-        self.storage.sent.clear()
-        self.notes.sent.clear()
-
-        self.publisher.publish(make_event(), [store], done=["store"])
-
-        self.assertEqual(self.storage.sent, [])
-        self.assertEqual([m.body for m in self.notes.sent], [b"as stored"])
 
     def test_on_step_reports_the_progress_after_each_step(self):
         seen = []

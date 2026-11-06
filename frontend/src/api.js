@@ -103,9 +103,9 @@ export async function checkWigosIdentifiers(ids) {
   return res.json();
 }
 
-// What was published for the stations of the user's issuer groups, newest first.
-// Returns { count, next, previous, results }. filters: { status, attention, limit,
-// offset }; `attention` keeps the failures someone can still act on.
+// The publication state of the stations the user can edit, one row per station,
+// latest version first. Returns { count, next, previous, results }. filters:
+// { status, limit, offset }.
 export async function listPublications(filters = {}) {
   const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value != null));
   const res = handle401(await fetch(`${API_URL}/api/publications/?${params}`, { credentials: "include" }));
@@ -116,20 +116,10 @@ export async function listPublications(filters = {}) {
   return data;
 }
 
-// Returns { [stationId]: { id, status, finished_at } }: each station's latest
-// event the user can see.
-export async function listLatestPublications() {
-  const res = handle401(await fetch(`${API_URL}/api/publications/latest/`, { credentials: "include" }));
-  if (!res.ok) {
-    throw new Error(`API request failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-// Publishes a failed event again; returns the updated event. A refusal (e.g. a
-// later change exists) is thrown with the reason.
-export async function retryPublication(eventId) {
-  const res = handle401(await fetch(`${API_URL}/api/publications/${encodeURIComponent(eventId)}/retry/`, {
+// Publishes the station's current record again; returns its updated row. A refusal
+// (e.g. its job may still be running) is thrown with the reason.
+export async function retryPublication(stationId) {
+  const res = handle401(await fetch(`${API_URL}/api/publications/${encodeURIComponent(stationId)}/retry/`, {
     method: "POST",
     credentials: "include",
     headers: csrfHeader(),

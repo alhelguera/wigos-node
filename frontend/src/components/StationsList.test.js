@@ -3,14 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createVuetify } from "vuetify";
 import StationsList from "./StationsList.vue";
-import { listLatestPublications, listMyStations } from "../api";
+import StationsMap from "./StationsMap.vue";
+import { listMyStations } from "../api";
 
-vi.mock("../api", () => ({ listMyStations: vi.fn(), listLatestPublications: vi.fn() }));
+vi.mock("../api", () => ({ listMyStations: vi.fn() }));
 
-const STATIONS = [
-  { station_id: 1, wsi: "0-756-0-a", name: "Alpha", latitude: 1, longitude: 2, can_edit: true },
-  { station_id: 2, wsi: "0-756-0-b", name: "Beta", latitude: 1, longitude: 2, can_edit: true },
-  { station_id: 3, wsi: "0-76-0-c", name: "Gamma", latitude: 1, longitude: 2, can_edit: false },
+// The statuses of Alpha and Beta; Gamma can't be edited, so it never has one.
+const stationsWith = (alpha, beta = "processed") => [
+  { station_id: 1, wsi: "0-756-0-a", name: "Alpha", latitude: 1, longitude: 2, can_edit: true, publication_status: alpha },
+  { station_id: 2, wsi: "0-756-0-b", name: "Beta", latitude: 1, longitude: 2, can_edit: true, publication_status: beta },
+  { station_id: 3, wsi: "0-76-0-c", name: "Gamma", latitude: 1, longitude: 2, can_edit: false, publication_status: null },
 ];
 
 let wrapper;
@@ -30,8 +32,6 @@ const row = (name) => wrapper.findAll("tbody tr").find((r) => r.text().includes(
 beforeEach(() => {
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   listMyStations.mockReset();
-  listLatestPublications.mockReset();
-  listMyStations.mockResolvedValue(STATIONS);
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -42,62 +42,93 @@ afterEach(() => {
 });
 
 describe("StationsList publishing status", () => {
-  it("shows a chip with each station's latest status", async () => {
-    listLatestPublications.mockResolvedValue({
-      1: { id: 9, status: "processed", finished_at: null },
-      2: { id: 8, status: "failed", finished_at: null },
-    });
+  it("shows a chip with each station's status", async () => {
+    listMyStations.mockResolvedValue(stationsWith("processed", "failed"));
     await mountList();
     expect(row("Alpha").find(".v-chip").text()).toBe("Processed");
     expect(row("Beta").find(".v-chip").text()).toBe("Publishing failed");
   });
 
-  it("shows no chip for a station without a status the user may see", async () => {
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "processed", finished_at: null } });
+  it("shows a station with no status as unknown", async () => {
+    listMyStations.mockResolvedValue(stationsWith(""));
+    await mountList();
+    expect(row("Alpha").find(".v-chip").text()).toBe("Unknown");
+  });
+
+  it("shows no chip for a station the user can't edit", async () => {
+    listMyStations.mockResolvedValue(stationsWith("processed"));
     await mountList();
     expect(row("Gamma").find(".v-chip").exists()).toBe(false);
   });
 
-  it("still lists the stations when the statuses can't be loaded", async () => {
-    listLatestPublications.mockRejectedValue(new Error("nope"));
+  it("shows why the stations couldn't be loaded", async () => {
+    listMyStations.mockRejectedValue(new Error("nope"));
     await mountList();
+    expect(wrapper.text()).toContain("Error: nope");
+  });
+
+  it("keeps the list when a refresh fails", async () => {
+    vi.useFakeTimers();
+    listMyStations.mockResolvedValue(stationsWith("pending"));
+    await mountList();
+
+    listMyStations.mockRejectedValue(new Error("nope"));
+    await vi.advanceTimersByTimeAsync(5000);
+
     expect(wrapper.findAll("tbody tr")).toHaveLength(3);
-    expect(wrapper.find("tbody .v-chip").exists()).toBe(false);
+    expect(row("Alpha").find(".v-chip").text()).toBe("Pending");
     expect(wrapper.text()).not.toContain("nope");
   });
 
-  it("follows a station until its change is through, then stops", async () => {
+  it("follows a station until it is through, then stops", async () => {
     vi.useFakeTimers();
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "pending", finished_at: null } });
+    listMyStations.mockResolvedValue(stationsWith("pending"));
     await mountList();
     expect(row("Alpha").find(".v-chip").text()).toBe("Pending");
 
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "processed", finished_at: null } });
+    listMyStations.mockResolvedValue(stationsWith("processing"));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(row("Alpha").find(".v-chip").text()).toBe("Publishing");
+
+    listMyStations.mockResolvedValue(stationsWith("processed"));
     await vi.advanceTimersByTimeAsync(5000);
     expect(row("Alpha").find(".v-chip").text()).toBe("Processed");
 
     await vi.advanceTimersByTimeAsync(30000);
-    expect(listLatestPublications).toHaveBeenCalledTimes(2);
+    expect(listMyStations).toHaveBeenCalledTimes(3);
+  });
+
+  it("leaves the map alone while following, so it doesn't fit itself again", async () => {
+    vi.useFakeTimers();
+    listMyStations.mockResolvedValue(stationsWith("pending"));
+    await mountList();
+    const shown = wrapper.findComponent(StationsMap).props("stations");
+
+    listMyStations.mockResolvedValue(stationsWith("processed"));
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(listMyStations).toHaveBeenCalledTimes(2);
+    expect(wrapper.findComponent(StationsMap).props("stations")).toBe(shown);
   });
 
   it("tells the app each time it has new statuses, so a failure reaches the counter", async () => {
     vi.useFakeTimers();
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "pending", finished_at: null } });
+    listMyStations.mockResolvedValue(stationsWith("pending"));
     await mountList();
     expect(wrapper.emitted("changed")).toHaveLength(1);
 
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "failed", finished_at: null } });
+    listMyStations.mockResolvedValue(stationsWith("failed"));
     await vi.advanceTimersByTimeAsync(5000);
     expect(wrapper.emitted("changed")).toHaveLength(2);
   });
 
   it("stops following when leaving the page", async () => {
     vi.useFakeTimers();
-    listLatestPublications.mockResolvedValue({ 1: { id: 9, status: "pending", finished_at: null } });
+    listMyStations.mockResolvedValue(stationsWith("pending"));
     await mountList();
     wrapper.unmount();
     wrapper = null;
     await vi.advanceTimersByTimeAsync(30000);
-    expect(listLatestPublications).toHaveBeenCalledTimes(1);
+    expect(listMyStations).toHaveBeenCalledTimes(1);
   });
 });

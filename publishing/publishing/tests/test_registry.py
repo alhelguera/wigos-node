@@ -76,7 +76,7 @@ class BuildPublishersTestCase(unittest.TestCase):
         self.assertErrors([config(NAME="")], "Publisher 0: NAME is required")
 
     def test_duplicate_names(self):
-        # also among disabled entries: names identify outbox progress
+        # also among disabled entries: names identify the receipts kept in Valkey
         self.assertErrors([config(), config(ENABLED=False)], "'echo': NAME is used more than once")
 
     def test_bad_paths(self):

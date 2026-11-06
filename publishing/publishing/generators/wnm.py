@@ -122,7 +122,7 @@ class WNMGenerator(MessageGenerator):
         if not files:
             if event.operation == Operation.DELETE:
                 return []  # nothing was announced, so nothing to retract
-            problem = f"No stored {self.media_type} file to announce for event {event.id}"
+            problem = f"No stored {self.media_type} file to announce for station {event.station_id}"
             if self.skip_missing:
                 logger.warning("%s; no WNM sent (skip_missing)", problem)
                 return []

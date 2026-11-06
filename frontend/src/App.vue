@@ -24,7 +24,7 @@ const showNav = computed(() => status.value === "authenticated" && NAV_ITEMS.som
 // null: open on large screens, closed on small ones (Vuetify's default)
 const navOpen = ref(null);
 
-// Failures someone can still act on, on the Publishing item. It only shows with
+// Failed stations the user can edit, on the Publishing item. It only shows with
 // the sidebar, so it is only kept up to date then.
 const FAILURES_REFRESH_MS = 30000;
 const failures = ref(0);
@@ -34,7 +34,7 @@ let failuresRequests = 0;
 async function refreshFailures() {
   const request = ++failuresRequests;
   try {
-    const { count } = await listPublications({ attention: 1, limit: 1 });
+    const { count } = await listPublications({ status: "failed", limit: 1 });
     // A slower, older answer must not replace a newer one.
     if (request === failuresRequests) failures.value = count;
   } catch {

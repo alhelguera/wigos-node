@@ -6,16 +6,14 @@ import PublicationStatusChip, { PUBLICATION_STATUSES } from "./PublicationStatus
 const emit = defineEmits(["changed"]);
 
 const PAGE_SIZE = 50;
-const REFRESH_MS = 5000; // while an event is on its way
+const REFRESH_MS = 5000; // while a station is on its way
 
-const OPERATIONS = { create: "Created", update: "Updated", delete: "Deleted" };
 const FILTERS = [
   { title: "All", value: null },
-  { title: "Needs attention", value: "attention" },
   ...Object.entries(PUBLICATION_STATUSES).map(([value, { label }]) => ({ title: label, value })),
 ];
 
-const events = ref([]);
+const rows = ref([]);
 const total = ref(0);
 const filter = ref(null);
 const loadState = ref({ status: "loading" });
@@ -25,19 +23,18 @@ const retryError = ref(null);
 let timer = null;
 let requests = 0;
 
-const hasMore = computed(() => events.value.length < total.value);
-const isActive = (event) => event.status === "pending" || event.status === "processing";
+const hasMore = computed(() => rows.value.length < total.value);
+const isActive = (row) => row.status === "pending" || row.status === "processing";
 
-// Fetches the first `limit` events. A slower, older answer is dropped, and a
+// Fetches the first `limit` stations. A slower, older answer is dropped, and a
 // failing refresh keeps what is shown.
 async function load(limit) {
   const request = ++requests;
   clearTimeout(timer);
   try {
-    const filters = filter.value === "attention" ? { attention: 1 } : { status: filter.value };
-    const data = await listPublications({ ...filters, limit, offset: 0 });
+    const data = await listPublications({ status: filter.value, limit, offset: 0 });
     if (request !== requests) return;
-    events.value = data.results;
+    rows.value = data.results;
     total.value = data.count;
     loadState.value = { status: "success" };
     emit("changed");
@@ -45,31 +42,31 @@ async function load(limit) {
     if (request !== requests) return;
     loadState.value = { status: "error", error: err.message };
   }
-  if (events.value.some(isActive)) {
-    timer = setTimeout(() => load(Math.max(events.value.length, PAGE_SIZE)), REFRESH_MS);
+  if (rows.value.some(isActive)) {
+    timer = setTimeout(() => load(Math.max(rows.value.length, PAGE_SIZE)), REFRESH_MS);
   }
 }
 
-const refresh = () => load(Math.max(events.value.length, PAGE_SIZE));
-const loadMore = () => load(events.value.length + PAGE_SIZE);
+const refresh = () => load(Math.max(rows.value.length, PAGE_SIZE));
+const loadMore = () => load(rows.value.length + PAGE_SIZE);
 
-async function retry(event) {
+async function retry(row) {
   retryError.value = null;
-  retrying.value = new Set(retrying.value).add(event.id);
+  retrying.value = new Set(retrying.value).add(row.station_id);
   try {
-    await retryPublication(event.id);
+    await retryPublication(row.station_id);
   } catch (err) {
-    retryError.value = `${event.wigos_identifier}: ${err.message}`;
+    retryError.value = `${row.wigos_identifier}: ${err.message}`;
   }
   const remaining = new Set(retrying.value);
-  remaining.delete(event.id);
+  remaining.delete(row.station_id);
   retrying.value = remaining;
   await refresh();
 }
 
 watch(filter, () => {
   loadState.value = { status: "loading" };
-  events.value = [];
+  rows.value = [];
   load(PAGE_SIZE);
 }, { immediate: true });
 
@@ -112,16 +109,15 @@ const formatTime = (value) => (value ? new Date(value).toLocaleString() : "");
     >
       {{ retryError }}
     </v-alert>
-    <p v-if="loadState.status === 'success' && events.length === 0" class="empty">
-      {{ filter ? "No changes with this status." : "No changes published for your stations yet." }}
+    <p v-if="loadState.status === 'success' && rows.length === 0" class="empty">
+      {{ filter ? "No stations with this status." : "None of your stations have been published yet." }}
     </p>
 
-    <template v-if="events.length > 0">
+    <template v-if="rows.length > 0">
       <v-table class="publications">
         <thead>
           <tr>
-            <th>When</th>
-            <th>Change</th>
+            <th>Last updated</th>
             <th>WIGOS identifier</th>
             <th>By</th>
             <th>Status</th>
@@ -129,32 +125,21 @@ const formatTime = (value) => (value ? new Date(value).toLocaleString() : "");
           </tr>
         </thead>
         <tbody>
-          <tr v-for="event in events" :key="event.id">
-            <td class="when">{{ formatTime(event.created_at) }}</td>
-            <td>{{ OPERATIONS[event.operation] }}</td>
-            <td>{{ event.wigos_identifier }}</td>
-            <td>{{ event.changed_by || event.source_label }}</td>
+          <tr v-for="row in rows" :key="row.station_id">
+            <td class="when">{{ formatTime(row.updated) }}</td>
+            <td>{{ row.wigos_identifier }}</td>
+            <td>{{ row.changed_by || "Administrator" }}</td>
             <td>
-              <PublicationStatusChip :status="event.status" />
-              <!-- Only failed events: a later success keeps the earlier error on the event. -->
-              <template v-if="event.status === 'failed'">
-                <p class="event-error text-error">{{ event.last_error }}</p>
-                <p v-if="event.needs_cleanup" class="event-note">
-                  Its file couldn't be removed, which holds back this station's later changes. An administrator needs to
-                  clean it up.
-                </p>
-                <p v-else-if="!event.can_retry" class="event-note">
-                  A later change replaced this one, so it can't be retried. To publish again, save the station.
-                </p>
-              </template>
+              <PublicationStatusChip :status="row.status" />
+              <p v-if="row.last_error" class="row-error text-error">{{ row.last_error }}</p>
             </td>
-            <td class="event-actions">
+            <td class="row-actions">
               <v-btn
-                v-if="event.can_retry"
+                v-if="row.can_retry"
                 color="primary"
                 size="small"
-                :loading="retrying.has(event.id)"
-                @click="retry(event)"
+                :loading="retrying.has(row.station_id)"
+                @click="retry(row)"
               >
                 Retry
               </v-btn>
@@ -211,14 +196,13 @@ const formatTime = (value) => (value ? new Date(value).toLocaleString() : "");
   white-space: nowrap;
 }
 
-.event-error,
-.event-note {
+.row-error {
   margin: 0.4rem 0 0;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
 
-.event-actions {
+.row-actions {
   text-align: end;
 }
 
