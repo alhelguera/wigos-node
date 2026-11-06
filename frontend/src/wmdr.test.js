@@ -91,6 +91,23 @@ describe("legacy records", () => {
 });
 
 describe("buildWmdrRecord", () => {
+  it("keeps an observation's contacts, which the form doesn't edit", () => {
+    const contacts = [{ organization: "Observation team" }];
+    const [observation] = allFields.properties.observations;
+    const record = { ...allFields, properties: { ...allFields.properties, observations: [{ ...observation, contacts }] } };
+
+    const form = parseWmdrRecord(record);
+    form.observations[0] = { ...form.observations[0], observedGeometry: null }; // as a row edit does
+
+    expect(buildWmdrRecord(form).properties.observations[0].contacts).toEqual(contacts);
+  });
+
+  it("drops a stored resolution on the station's time, so the record can be saved", () => {
+    const rebuilt = roundTrip({ ...allFields, time: { interval: ["2020-01", ".."], resolution: "PT1H" } });
+    expect(rebuilt.time).toEqual({ interval: ["2020-01", ".."] });
+    expect(validateWmdrRecord(rebuilt)).toEqual([]);
+  });
+
   it("reports every required field for an empty form", () => {
     expect(validateWmdrRecord(roundTrip({}))).toEqual([
       "id has an invalid format",

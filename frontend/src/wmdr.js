@@ -276,7 +276,9 @@ function cleanObservation(observation) {
   if (observedGeometry) cleaned.observedGeometry = observedGeometry;
   cleaned.programAffiliations = (observation.programAffiliations || []).map(cleanProgramAffiliation).filter(Boolean);
   cleaned.configurations = (observation.configurations || []).map(cleanConfiguration).filter(Boolean);
-  const isEmpty = !observedProperty && !observedGeometry && !cleaned.programAffiliations.length && !cleaned.configurations.length;
+  // Not editable in the form, so kept exactly as stored.
+  if (observation.contacts?.length) cleaned.contacts = observation.contacts;
+  const isEmpty = !observedProperty && !observedGeometry && !cleaned.programAffiliations.length && !cleaned.configurations.length && !cleaned.contacts;
   return isEmpty ? null : cleaned;
 }
 
@@ -329,7 +331,9 @@ export function buildWmdrRecord(form, { now = new Date(), origin } = {}) {
       coordinates,
     },
   };
-  const time = cleanTime(form.time);
+  // The schema doesn't allow a resolution here, and the form has no field to
+  // clear a stored one, which would make the record impossible to save.
+  const time = cleanTime(form.time && { ...form.time, resolution: "" });
   if (time) record.time = time;
   record.properties = properties;
   record.links = (form.links || []).map((link) => cleanLink(link)).filter(Boolean);
@@ -485,6 +489,7 @@ function parseObservation(observation) {
     observedGeometry: parseConcept(observation.observedGeometry),
     programAffiliations: (observation.programAffiliations || []).map(parseProgramAffiliation),
     configurations: (observation.configurations || []).map(parseConfiguration),
+    ...(observation.contacts && { contacts: observation.contacts }),
   };
 }
 
